@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: billing
+      POSTGRES_PASSWORD: billing
+      POSTGRES_DB: billing
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billing -d billing"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-only-not-for-production}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID:-}
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-http://localhost:8000/v1/checkout/success}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-http://localhost:8000/v1/checkout/cancel}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-only-not-for-production}
+      ROLLUP_INTERVAL_SECONDS: ${ROLLUP_INTERVAL_SECONDS:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sh -c "python -m app.jobs.rollup"
+
+volumes:
+  postgres_data:
